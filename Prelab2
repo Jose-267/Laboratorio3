@@ -1,0 +1,88 @@
+.include "M328PDEF.inc"      ; Definiciones específicas para el ATMega328P
+.cseg
+.org 0x0000
+
+; Alias para registros:
+.def binary_counter = R20   ; Contador binario (valor de 0 a 15)
+.def overflow_count = R21   ; Contador para contar los desbordamientos del Timer0 (para 100ms)
+.def temp         = R16     ; Registro temporal
+.def temp2        = R17     ; Registro temporal adicional
+
+
+start:
+    ; Configurar la pila
+    LDI temp, LOW(RAMEND)
+    OUT SPL, temp
+    LDI temp, HIGH(RAMEND)
+    OUT SPH, temp
+
+    ; Configuración del reloj:
+    ; Suponiendo un oscilador de 16MHz, se utiliza el prescaler del sistema para obtener 1MHz.
+    LDI temp, (1 << CLKPCE)
+    STS CLKPR, temp         ; Habilitar cambio de prescaler
+    LDI temp, 0b00000100    ; Dividir por 16 (16MHz/16 = 1MHz)
+    STS CLKPR, temp
+
+    ; Inicializar Timer0
+    CALL INIT_TMR0
+
+    ; Configurar los primeros 4 bits de PORTB como salida (PB0 a PB3)
+    LDI temp, 0x0F          ; 0x0F = 0000 1111
+    OUT DDRB, temp
+
+    ; Inicializar los contadores a 0
+    CLR binary_counter
+    CLR overflow_count
+
+MAIN_LOOP:
+    ; Esperar a que Timer0 desborde (se genera la bandera TOV0)
+WAIT_OVF:
+    IN temp, TIFR0
+    SBRS temp, TOV0         ; Si TOV0 está en 1, salta la siguiente instrucción
+    RJMP WAIT_OVF           ; Si TOV0 no está, seguir esperando
+
+    ; Limpiar la bandera de desbordamiento escribiendo 1 en TOV0
+    SBI TIFR0, TOV0
+
+    ; Recargar Timer0 con el valor inicial (100)
+    LDI temp, 100
+    OUT TCNT0, temp
+
+    ; Incrementar el contador de desbordamientos
+    INC overflow_count
+
+    ; Cada 10 desbordamientos se aproxima un intervalo de 100ms:
+    CPI overflow_count, 10
+    BRNE MAIN_LOOP         ; Si no son 10, volver al inicio del bucle
+
+    ; Si se han acumulado 10 desbordamientos, reiniciar overflow_count
+    CLR overflow_count
+
+    ; Incrementar el contador binario (4 bits)
+    INC binary_counter
+    ; Si el valor llega a 16 (0x10) lo reiniciamos a 0
+    CPI binary_counter, 16
+    BRNE UPDATE_OUTPUT
+    CLR binary_counter
+
+UPDATE_OUTPUT:
+    ; Actualizar la salida en los 4 bits inferiores de PORTB
+    ; Se preservan los 4 bits superiores (por si se usan para otra función)
+    IN temp, PORTB
+    ANDI temp, 0xF0         ; Limpiar los 4 bits inferiores
+    MOV temp2, binary_counter  ; Copiar el contador en temp2
+    OR  temp2, temp         ; Combinar el valor del contador con los bits superiores de PORTB
+    OUT PORTB, temp2
+
+    RJMP MAIN_LOOP
+
+INIT_TMR0:
+    ; Configurar Timer0 en modo normal con prescaler 64.
+    ; Con F_CPU = 1MHz y prescaler 64, cada tick dura 64 μs.
+    ; Cargando TCNT0 con 100, se cuentan 256 - 100 = 156 ticks,
+    ; lo que da aproximadamente 156 × 64μs ≈ 10ms de retardo por overflow.
+    LDI temp, (1<<CS01) | (1<<CS00)
+    OUT TCCR0B, temp
+    LDI temp, 100
+    OUT TCNT0, temp
+    RET
