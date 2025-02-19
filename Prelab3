@@ -1,0 +1,111 @@
+.include "M328PDEF.inc"
+.cseg
+.org 0x0000
+    JMP START         ; Salto a la rutina principal
+
+; Vector de interrupción para INT0 (PD2)
+.org INT0addr
+    RJMP ISR_INT0
+
+; Vector de interrupción para INT1 (PD3)
+.org INT1addr
+    RJMP ISR_INT1
+
+START:
+    ; Inicialización de la pila
+    LDI R16, LOW(RAMEND)
+    OUT SPL, R16
+    LDI R16, HIGH(RAMEND)
+    OUT SPH, R16
+
+
+    ; Configuración del reloj
+    CLI                        
+    LDI R16, (1 << CLKPCE)
+    STS CLKPR, R16              
+    LDI R16, (1 << CLKPS2)
+    STS CLKPR, R16              
+
+    
+    ; Configurar PD2 y PD3 como entradas con pull-up
+    CBI DDRD, PD2               ; PD2 como entrada
+    SBI PORTD, PD2              ; Activa pull-up en PD2
+    CBI DDRD, PD3               ; PD3 como entrada
+    SBI PORTD, PD3              ; Activa pull-up en PD3
+
+    ; Configurar los 4 bits inferiores de PORTB como salidas (LEDs)
+    LDI R16, 0x0F               ; Máscara para 4 bits
+    OUT DDRB, R16               ; Configura PORTB (4 bits) como salida
+    LDI R24, 0x00               ; Inicializa el contador en 0
+    OUT PORTB, R24              ; Inicializa los LEDs apagados
+
+    ; Configurar interrupciones externas INT0 y INT1 para detectar cualquier cambio
+    LDI R16, (1<<ISC00) | (1<<ISC10)
+    STS EICRA, R16
+
+    ; Habilitar interrupciones externas INT0 y INT1
+    SBI EIMSK, INT0
+    SBI EIMSK, INT1
+
+    SEI                         ; Habilita interrupciones globales
+
+MAIN_LOOP:
+    RJMP MAIN_LOOP              ; Bucle infinito
+
+ISR_INT0:
+    PUSH R16
+    IN   R16, SREG
+    PUSH R16
+
+	RCALL DELAY
+    RCALL INCR               ; Incrementa contador y actualiza LEDs
+
+    POP R16
+    OUT SREG, R16
+    POP R16
+    RETI
+
+
+ISR_INT1:
+    PUSH R16
+    IN   R16, SREG
+    PUSH R16
+
+	RCALL DELAY
+    RCALL DECR               ; Incrementa contador y actualiza LEDs
+
+    POP R16
+    OUT SREG, R16
+    POP R16
+    RETI
+
+
+INCR:
+    INC R24                 ; Incrementa el contador
+    ANDI R24, 0x0F          ; Limita el valor a 4 bits (0 a 15)
+    OUT PORTB, R24          ; Actualiza los LEDs en PORTB
+    RET
+
+DECR:
+    DEC R24                 ; Incrementa el contador
+    ANDI R24, 0x0F          ; Limita el valor a 4 bits (0 a 15)
+    OUT PORTB, R24          ; Actualiza los LEDs en PORTB
+    RET
+
+DELAY:
+    LDI R18, 0
+DELAY_LOOP1:
+    INC R18
+    CPI R18, 0
+    BRNE DELAY_LOOP1
+    LDI R18, 0
+DELAY_LOOP2:
+    INC R18
+    CPI R18, 0
+    BRNE DELAY_LOOP2
+    LDI R18, 0
+DELAY_LOOP3:
+    INC R18
+    CPI R18, 0
+    BRNE DELAY_LOOP3
+    RET
