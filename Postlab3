@@ -1,0 +1,145 @@
+.include "M328PDEF.inc"     
+
+.DSEG
+TABLA: .BYTE 16                ; Tabla de patrones para dígitos (0 a 9)
+
+;------------------------------------------------------------------------------
+.CSEG
+.org 0x0000
+    rjmp START                ; Vector de reset
+
+.org 0x0020
+    rjmp TMR0_ISR             ; Vector de interrupción del Timer0
+
+START:
+    ; Inicialización del Stack
+    ldi   r16, low(RAMEND)
+    out   SPL, r16
+    ldi   r16, high(RAMEND)
+    out   SPH, r16
+
+    cli                       ; Deshabilitar interrupciones
+
+    ; Configurar el prescaler del reloj
+    ldi   r16, (1 << CLKPCE)
+    sts   CLKPR, r16
+    ldi   r16, 0b00000100     ; Ajusta el prescaler según tus necesidades
+    sts   CLKPR, r16
+
+    ; Configurar Timer0: prescaler 64
+    ldi   r16, (1 << CS01) | (1 << CS00)
+    out   TCCR0B, r16
+
+    ldi   r16, 100
+    out   TCNT0, r16
+
+    ldi   r16, (1 << TOIE0)
+    sts   TIMSK0, r16
+
+    ; Configurar PORTD como salida para los segmentos del display
+    ldi   r16, 0xFF
+    out   DDRD, r16
+
+    ; Configurar PORTC para controlar los displays (PC2 y PC3)
+    ldi   r16, (1 << PC2) | (1 << PC3)   ; PC2 y PC3 como salidas
+    out   DDRC, r16
+
+    ; Cargar la tabla de patrones en RAM
+    ldi   r26, low(TABLA)
+    ldi   r27, high(TABLA)
+    
+    ldi   r21, 0x7F
+    st    X+, r21
+    ldi   r21, 0x12
+    st    X+, r21
+    ldi   r21, 0xBC
+    st    X+, r21
+    ldi   r21, 0xB6
+    st    X+, r21
+    ldi   r21, 0xD2
+    st    X+, r21
+    ldi   r21, 0xE6
+    st    X+, r21
+    ldi   r21, 0xEE
+    st    X+, r21
+    ldi   r21, 0x32
+    st    X+, r21
+    ldi   r21, 0xFE
+    st    X+, r21
+    ldi   r21, 0xF6
+    st    X+, r21
+
+    ; Inicializar variables:
+    ; r20: Contador de ticks (cada tick ≈20 ms, 50 ticks = 1 s)
+    ; r22: Dígito de las unidades
+    ; r23: Dígito de las decenas
+    ; r19: Variable de multiplexado (0: unidades, 1: decenas)
+    ldi   r20, 0
+    ldi   r22, 0         ; unidades = 0
+    ldi   r23, 0         ; decenas = 0
+    ldi   r19, 0         ; multiplexado inicia con unidades
+
+    sei                     ; Habilitar interrupciones
+
+MAIN_LOOP:
+    rjmp  MAIN_LOOP         ; Bucle infinito
+
+;-----------------------------------------------------------
+; Rutina de Interrupción del Timer0 (≈20 ms por tick)
+TMR0_ISR:
+    ; Recargar el Timer0 para mantener un tick de ≈20 ms
+    ldi   r16, 100
+    out   TCNT0, r16
+
+    ; --- Multiplexado de displays ---
+    ; Si r19 = 0, se muestra el dígito de las unidades; si r19 = 1, el de las decenas.
+    tst   r19
+    breq DISPLAY_UNIDADES   ; Si r19 es 0, ir a mostrar unidades
+
+DISPLAY_DECENAS:
+    ; Cargar patrón correspondiente al dígito de decenas (r23)
+    ldi   r26, low(TABLA)
+    ldi   r27, high(TABLA)
+    add   r26, r23         ; Índice = valor de r23
+    ld    r16, X
+    out   PORTD, r16
+    ; Activar display de decenas (ahora en PC3)
+    ldi   r16, (1 << PC3)  ; PC3 = 1, PC2 = 0
+    out   PORTC, r16
+    rjmp MULTIPLEX_TOGGLE
+
+DISPLAY_UNIDADES:
+    ; Cargar patrón correspondiente al dígito de unidades (r22)
+    ldi   r26, low(TABLA)
+    ldi   r27, high(TABLA)
+    add   r26, r22         ; Índice = valor de r22
+    ld    r16, X
+    out   PORTD, r16
+    ; Activar display de unidades (ahora en PC2)
+    ldi   r16, (1 << PC2)  ; PC2 = 1, PC3 = 0
+    out   PORTC, r16
+
+MULTIPLEX_TOGGLE:
+    ; Alternar la variable de multiplexado (toggle entre 0 y 1)
+    ldi   r18, 1
+    eor   r19, r18
+
+    ; --- Actualización del contador de 1 segundo ---
+    inc   r20
+    cpi   r20, 100          ; 50 ticks x 20 ms = 1000 ms
+    brne  ISR_EXIT         ; Si no han pasado 1 s, salir de la ISR
+    clr   r20              ; Reiniciar contador de ticks
+
+    ; Actualizar contador de 00 a 60:
+    inc   r22             ; Incrementa las unidades
+    cpi   r22, 10
+    brlo SKIP_CARRY
+    clr   r22             ; Reinicia unidades a 0
+    inc   r23             ; Incrementa decenas
+    cpi   r23, 6
+    brlo SKIP_CARRY     ; Si decenas es menor que 6, continúa
+    clr   r23             ; Al alcanzar 6 (60) se reinicia a 00
+SKIP_CARRY:
+
+ISR_EXIT:
+    reti
